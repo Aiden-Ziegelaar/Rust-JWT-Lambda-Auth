@@ -1,2 +1,2 @@
-pub mod policyBuilder;
-pub mod jwtValidation;
+pub mod policy_builder;
+pub mod jwt_validation;
