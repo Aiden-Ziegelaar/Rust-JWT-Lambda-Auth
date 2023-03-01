@@ -63,7 +63,7 @@ impl APIGatewayPolicyBuilder {
           &self.aws_account_id,
           &self.rest_api_id,
           &self.stage,
-          serde_variant::to_variant_name(&method).unwrap().to_string(),
+          serde_variant::to_variant_name(&method).unwrap(),
           resource.into().trim_start_matches('/')
       );
 
