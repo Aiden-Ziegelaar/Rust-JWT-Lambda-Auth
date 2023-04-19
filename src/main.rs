@@ -10,7 +10,7 @@ use serde_json::json;
 
 lazy_static! {
     /// Instantiate JWKS_CACHE to reuse keys between requests
-    static ref JWKS_CACHE: JwksCache = JwksCache::new();
+    static ref JWKS_CACHE: JwksCache = JwksCache::new(std::env::var("JWKS_URL").unwrap());
 }
 
 /// This is the main body for the function.

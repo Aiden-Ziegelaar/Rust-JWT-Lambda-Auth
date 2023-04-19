@@ -1,6 +1,6 @@
 use jsonwebtoken::{decode, Validation, jwk::{JwkSet}, DecodingKey, decode_header};
 use serde::{Deserialize, Serialize };
-use std::{time::{SystemTime, UNIX_EPOCH }, env, fmt, collections::HashMap};
+use std::{time::{SystemTime, UNIX_EPOCH }, env, fmt, collections::HashMap, f32::consts::E};
 
 //struct to hold the claims of the jwt token
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,6 +25,7 @@ impl fmt::Display for JwtError {
     }
 }
 
+
 pub fn fetch_jwks(url: &String) -> Result<JwkSet, JwtError> {
   let jwks_reponse =  match reqwest::blocking::get(url) {
     Ok(res) => res,
@@ -46,7 +47,7 @@ pub fn jwks_to_decoding_keys(jwks: JwkSet) -> Result<HashMap<String, DecodingKey
     };
     let decoding_key = match DecodingKey::from_jwk(&key) {
       Ok(key) => key,
-      Err(_) => return Err(JwtError{message: "Failed to create decoding key".to_string(), component: "jwks_to_decoding_keys".to_string()}),
+      Err(_) => return Err(JwtError{message: "Failed to create decoding key".to_string(), component: "jwks_to_decoding_keys".to_string()})
     };
     map.insert(key_id.to_string(), decoding_key);
   };
@@ -55,7 +56,7 @@ pub fn jwks_to_decoding_keys(jwks: JwkSet) -> Result<HashMap<String, DecodingKey
 
 pub struct JwksCache {
   /// Time in seconds since JWKS were last updated
-  pub last_update: usize,
+  pub last_update: u64,
   /// Url to fetch JWKS from
   pub jwks_url: String,
   /// jwks Hashmap to store decode keys
@@ -63,22 +64,18 @@ pub struct JwksCache {
 }
 
 impl JwksCache {
-  pub fn new() -> JwksCache {
-    let jwks_url: String = env::var("JWKS_URL").unwrap();
+  pub fn new(jwks_url: String) -> JwksCache {
     let jwks: JwkSet = fetch_jwks(&jwks_url).unwrap();
     let jwks_hashmap = jwks_to_decoding_keys(jwks).unwrap();
     JwksCache {
-      last_update: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as usize,
+      last_update: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
       jwks_url,
       jwks_hashmap
     }
   }
 
   pub fn update(&mut self) -> Result<(), JwtError> {
-    let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
-      Ok(n) => n.as_secs() as usize,
-      Err(_) => return Err(JwtError{message: "Unable to get system time.".to_string(), component: "JwksCache.update".to_string()}),
-    };
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     let fetched_jwks = fetch_jwks(&self.jwks_url);
     let jwks = match fetched_jwks {
       Ok(jwks) => jwks,
@@ -94,14 +91,11 @@ impl JwksCache {
   }
 
   pub fn get(&mut self, kid: &String) -> Result<&DecodingKey, JwtError> {
-    let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
-      Ok(n) => n.as_secs() as usize,
-      Err(_) => return Err(JwtError{message: "Unable to get system time.".to_string(), component: "JwksCache.get".to_string()}),
-    };
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     if now - self.last_update > 3600 {
       match self.update() {
         Ok(_) => (),
-        Err(_) => (),
+        Err(e) => println!("{}", e.to_string()),
       };
     };
     match self.jwks_hashmap.get(kid) {
@@ -138,19 +132,18 @@ mod tests {
   use super::*;
   use mockito;
   use jsonwebtoken::{ jwk, Algorithm };
-  use base64::{engine::general_purpose, Engine as _};
+  use base64::{engine::general_purpose::URL_SAFE_NO_PAD, engine::general_purpose::STANDARD, Engine as _};
+
+  // Fetch JWKS tests
 
   #[test]
-  fn positive_jwks_test_path () {
+  fn positive_fetch_jwks_test () {
     let mut server = mockito::Server::new();
 
     let url = server.url();
 
     let rng = ring::rand::SystemRandom::new();
     let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
-    
-    // Normally the application would store the PKCS#8 file persistently. Later
-    // it would read the PKCS#8 file from persistent storage to use it.
     
     let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
     let jwks = JwkSet {
@@ -167,7 +160,7 @@ mod tests {
             x509_sha256_fingerprint: None }, 
           algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
             curve: jwk::EllipticCurve::Ed25519,
-            x: general_purpose::STANDARD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
             key_type: jwk::OctetKeyPairType::OctetKeyPair })
         },
       ] 
@@ -189,7 +182,7 @@ mod tests {
   }
 
   #[test]
-  fn negative_jwks_test_path_fail_parse () {
+  fn negative_fetch_jwks_test_fail_parse () {
     let server = mockito::Server::new();
 
     let url = server.url();
@@ -200,9 +193,546 @@ mod tests {
   }
 
   #[test]
-  fn negative_jwks_test_path_no_endpoint () {
+  fn negative_fetch_jwks_test_no_endpoint () {
     let result = fetch_jwks(&"url".to_string());
 
     assert_eq!(result.unwrap_err(), JwtError{message: "Failed to fetch jwks".to_string(), component: "fetch_jwks".to_string()});
+  } 
+
+  // JWKS to decodeing keys
+  #[test]
+  fn positive_jwks_to_decoding_keys_test () {
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
+    let jwks = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id:Some("KEY123".to_string()), 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+    let result = jwks_to_decoding_keys(jwks).unwrap();
+
+    assert_eq!(result.len(), 1);
+  }  
+
+  #[test]
+  fn negative_jwks_to_decoding_keys_test_invalid_encoding () {
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
+    let jwks = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id:Some("KEY123".to_string()), 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: format!("{}/", STANDARD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec())),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+    let result = jwks_to_decoding_keys(jwks);
+
+    assert_eq!(result.err(), Some(JwtError{message: "Failed to create decoding key".to_string(), component: "jwks_to_decoding_keys".to_string()}));
+  }  
+
+  #[test]
+  fn negative_jwks_to_decoding_keys_test_no_kid () {
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
+    let jwks = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id: None, 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: STANDARD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+    let result = jwks_to_decoding_keys(jwks);
+
+    assert_eq!(result.err(), Some(JwtError{message: "Key id not found in registered JWKS".to_string(), component: "jwks_to_decoding_keys".to_string()}));
   }
+
+  // JWK Cache tests
+  #[test]
+  fn positive_jwks_cache_new_test () {
+    let mut server = mockito::Server::new();
+
+    let url = server.url();
+
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
+    let jwks = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id:Some("KEY123".to_string()), 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+
+    let mock = server.mock("GET", "/")
+    .with_status(200)
+    .with_header("content-type", "application/json")
+    .with_body(serde_json::to_string(&jwks).unwrap())
+    .create();
+
+    let cache = JwksCache::new(url);
+
+    mock.assert();
+
+    server.reset();
+
+    assert_eq!(cache.jwks_hashmap.len(), 1);
+  }
+
+  #[test]
+  fn positive_jwks_cache_update_test () {
+    let mut server = mockito::Server::new();
+
+    let url = server.url();
+
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
+    let jwks = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id:Some("KEY123".to_string()), 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+
+    let mock = server.mock("GET", "/")
+    .with_status(200)
+    .with_header("content-type", "application/json")
+    .with_body(serde_json::to_string(&jwks).unwrap())
+    .create();
+
+    let mut cache = JwksCache::new(url);
+
+    cache.update().unwrap();
+
+    mock.expect(2);
+
+    server.reset();
+
+    assert_eq!(cache.jwks_hashmap.len(), 1);
+  }
+
+  #[test]
+  fn positive_jwks_cache_get_test () {
+    let mut server = mockito::Server::new();
+
+    let url = server.url();
+
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
+    let jwks = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id:Some("KEY123".to_string()), 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+
+    let mock = server.mock("GET", "/")
+    .with_status(200)
+    .with_header("content-type", "application/json")
+    .with_body(serde_json::to_string(&jwks).unwrap())
+    .create();
+
+    let mut cache = JwksCache::new(url);
+
+    cache.last_update = 0;
+
+    let result = cache.get(&"KEY123".to_string());
+
+    mock.expect(2);
+
+    assert!(result.is_ok());
+
+    server.reset();
+  }
+
+  #[test]
+  fn negative_jwks_cache_update_test_fetch_failure () {
+    let mut server = mockito::Server::new();
+
+    let url = server.url();
+
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
+    let jwks = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id:Some("KEY123".to_string()), 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+
+    let mock = server.mock("GET", "/")
+    .with_status(200)
+    .with_header("content-type", "application/json")
+    .with_body(serde_json::to_string(&jwks).unwrap())
+    .create();
+
+    let mut cache = JwksCache::new(url);
+
+    cache.last_update = 0;
+
+    cache.jwks_url = "".to_string();
+
+    let result = cache.update();
+
+    mock.assert();
+
+    assert_eq!(result.err(), Some(JwtError{component: "JwksCache.update".to_string(), message: "Failed to update jwks".to_string()}));
+
+    server.reset();
+  }
+
+
+  #[test]
+  fn negative_jwks_cache_update_test_decode_failure () {
+    let mut server = mockito::Server::new();
+
+    let url = server.url();
+
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
+    let jwks = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id:Some("KEY123".to_string()), 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+
+    let jwks_no_kid = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id: None, 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+
+    let mock = server.mock("GET", "/")
+    .with_status(200)
+    .with_header("content-type", "application/json")
+    .with_body(serde_json::to_string(&jwks).unwrap())
+    .create();
+
+    let mut cache = JwksCache::new(url);
+
+    cache.last_update = 0;
+
+    mock.assert();
+
+    let mock2 = server.mock("GET", "/")
+    .with_status(200)
+    .with_header("content-type", "application/json")
+    .with_body(serde_json::to_string(&jwks_no_kid).unwrap())
+    .create();
+
+    let result = cache.update();
+
+    mock2.assert();
+
+    assert_eq!(result.err(), Some(JwtError{component: "JwksCache.update".to_string(), message: "Failed to update jwks hashmap".to_string()}));
+
+    server.reset();
+  }
+
+  #[test]
+  fn negative_jwks_cache_get_test_decode_failure () {
+    let mut server = mockito::Server::new();
+
+    let url = server.url();
+
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
+    let jwks = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id:Some("KEY123".to_string()), 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+
+    let jwks_no_kid = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id: None, 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+
+    let mock = server.mock("GET", "/")
+    .with_status(200)
+    .with_header("content-type", "application/json")
+    .with_body(serde_json::to_string(&jwks).unwrap())
+    .create();
+
+    let mut cache = JwksCache::new(url);
+
+    cache.last_update = 0;
+
+    mock.assert();
+
+    let mock2 = server.mock("GET", "/")
+    .with_status(200)
+    .with_header("content-type", "application/json")
+    .with_body(serde_json::to_string(&jwks_no_kid).unwrap())
+    .create();
+
+    let result = cache.get(&"KEY123".to_string());
+
+    mock2.assert();
+
+    assert!(result.is_ok());
+
+    server.reset();
+  }
+
+  #[test]
+  fn negative_jwks_cache_update_test_cache_miss () {
+    let mut server = mockito::Server::new();
+
+    let url = server.url();
+
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
+    let jwks = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id:Some("KEY123".to_string()), 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+
+    let mock = server.mock("GET", "/")
+    .with_status(200)
+    .with_header("content-type", "application/json")
+    .with_body(serde_json::to_string(&jwks).unwrap())
+    .create();
+
+    let mut cache = JwksCache::new(url);
+
+    let result = cache.get(&"KEY321".to_string());
+
+    mock.assert();
+
+    assert_eq!(result.err(), Some(JwtError{component: "JwksCache.get".to_string(), message: "Unable to find jwk with matching KID".to_string()}));
+
+    server.reset();
+  }
+
+  #[test]
+  fn positive_validate_jwt_test () {
+    let mut server = mockito::Server::new();
+
+    let url = server.url();
+
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
+    let jwks = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id:Some("KEY123".to_string()), 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+
+    let mock = server.mock("GET", "/")
+    .with_status(200)
+    .with_header("content-type", "application/json")
+    .with_body(serde_json::to_string(&jwks).unwrap())
+    .create();
+
+    let mut cache = JwksCache::new(url);
+
+    cache.last_update = 0;
+
+    let result = cache.get(&"KEY123".to_string());
+
+    mock.expect(2);
+
+    assert!(result.is_ok());
+
+    server.reset();
+  }
+
+
 }
