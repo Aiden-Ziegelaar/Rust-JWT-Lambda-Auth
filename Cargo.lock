@@ -532,11 +532,13 @@ name = "jwtAuth"
 version = "0.1.0"
 dependencies = [
  "aws_lambda_events",
+ "base64 0.21.0",
  "jsonwebtoken",
  "lambda_runtime",
  "lazy_static",
  "mockito",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "serde_variant",

@@ -13,7 +13,7 @@ pub struct Claims {
   sub: String,         // Subject (whom token refers to)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct JwtError{
   component: String,
   message: String
@@ -136,13 +136,73 @@ pub fn validate_jwt(jwt: String, mut key_cache: JwksCache) -> Result<Claims, Jwt
 mod tests {
 
   use super::*;
+  use mockito;
+  use jsonwebtoken::{ jwk, Algorithm };
+  use base64::{engine::general_purpose, Engine as _};
 
-  fn init() {
+  #[test]
+  fn positive_jwks_test_path () {
+    let mut server = mockito::Server::new();
 
+    let url = server.url();
+
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    
+    // Normally the application would store the PKCS#8 file persistently. Later
+    // it would read the PKCS#8 file from persistent storage to use it.
+    
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
+    let jwks = JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use:Some(jwk::PublicKeyUse::Signature),
+            key_operations:Some(vec![jwk::KeyOperations::Sign]),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id:Some("KEY123".to_string()), 
+            x509_url: None, 
+            x509_chain: None, 
+            x509_sha1_fingerprint: None, 
+            x509_sha256_fingerprint: None }, 
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: general_purpose::STANDARD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair })
+        },
+      ] 
+    };
+
+    let mock = server.mock("GET", "/")
+    .with_status(200)
+    .with_header("content-type", "application/json")
+    .with_body(serde_json::to_string(&jwks).unwrap())
+    .create();
+
+    let result = fetch_jwks(&url);
+
+    mock.assert();
+
+    server.reset();
+
+    assert_eq!(result.unwrap(), jwks);
   }
 
   #[test]
-  fn positive_test_path () {
+  fn negative_jwks_test_path_fail_parse () {
+    let server = mockito::Server::new();
 
+    let url = server.url();
+
+    let result = fetch_jwks(&url);
+
+    assert_eq!(result.unwrap_err(), JwtError{message: "Failed to parse jwks".to_string(), component: "fetch_jwks".to_string()});
+  }
+
+  #[test]
+  fn negative_jwks_test_path_no_endpoint () {
+    let result = fetch_jwks(&"url".to_string());
+
+    assert_eq!(result.unwrap_err(), JwtError{message: "Failed to fetch jwks".to_string(), component: "fetch_jwks".to_string()});
   }
 }
