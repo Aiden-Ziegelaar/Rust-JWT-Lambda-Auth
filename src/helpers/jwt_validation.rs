@@ -1,6 +1,6 @@
-use jsonwebtoken::{decode, Validation, jwk::{JwkSet}, DecodingKey, decode_header};
+use jsonwebtoken::{decode, Validation, jwk::{JwkSet}, DecodingKey, decode_header };
 use serde::{Deserialize, Serialize };
-use std::{time::{SystemTime, UNIX_EPOCH }, env, fmt, collections::HashMap, f32::consts::E};
+use std::{time::{SystemTime, UNIX_EPOCH }, fmt, collections::HashMap };
 
 //struct to hold the claims of the jwt token
 #[derive(Debug, Serialize, Deserialize)]
@@ -106,11 +106,12 @@ impl JwksCache {
 }
 
 //function to validate the jwt token
-pub fn validate_jwt(jwt: String, mut key_cache: JwksCache) -> Result<Claims, JwtError> {
+pub fn validate_jwt(jwt: String, mut key_cache: JwksCache, validation: Validation) -> Result<Claims, JwtError> {
   let header = match decode_header(&jwt) {
     Ok(header) => header,
     Err(_) => return Err(JwtError{message: "Failed to decode jwt header".to_string(), component: "validate_jwt".to_string()}),
   };
+  println!("{:?}", header);
   let kid = match header.kid {
     Some(kid) => kid,
     None => return Err(JwtError{message: "No KID found in jwt header".to_string(), component: "validate_jwt".to_string()}),
@@ -119,9 +120,12 @@ pub fn validate_jwt(jwt: String, mut key_cache: JwksCache) -> Result<Claims, Jwt
     Ok(key) => key,
     Err(_) => return Err(JwtError{message: "Failed to get jwk from cache".to_string(), component: "validate_jwt".to_string()}),
   };
-  let claims = match decode::<Claims>(&jwt, key, &Validation::default()){
+  let claims = match decode::<Claims>(&jwt, key, &validation) {
     Ok(claims) => claims.claims,
-    Err(_) => return Err(JwtError{message: "Failed to decode jwt".to_string(), component: "validate_jwt".to_string()}),
+    Err(e) => {
+      println!("{}", e);
+      return Err(JwtError{message: "Failed to decode jwt".to_string(), component: "validate_jwt".to_string()})
+    },
   };
   Ok(claims)
 }
@@ -131,7 +135,7 @@ mod tests {
 
   use super::*;
   use mockito;
-  use jsonwebtoken::{ jwk, Algorithm };
+  use jsonwebtoken::{ jwk, Algorithm, EncodingKey, Header, encode };
   use base64::{engine::general_purpose::URL_SAFE_NO_PAD, engine::general_purpose::STANDARD, Engine as _};
 
   // Fetch JWKS tests
@@ -714,22 +718,44 @@ mod tests {
         },
       ] 
     };
+    
+    let signing_key  = EncodingKey::from_ed_der(&pkcs8_bytes.as_ref().to_vec());
 
-    let mock = server.mock("GET", "/")
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
+    let jwt = encode(
+      &Header {
+        alg: Algorithm::EdDSA,
+        kid: Some("KEY123".to_string()),
+        ..Default::default()
+      }, &Claims {
+        aud: "https://example.com".to_string(),
+        exp: (now + 60) as usize,
+        iat: now as usize,
+        iss: "https://example.com".to_string(),
+        nbf: now as usize,
+        sub: "1234567890".to_string(),
+      }, &signing_key).unwrap();
+
+    let _mock = server.mock("GET", "/")
     .with_status(200)
     .with_header("content-type", "application/json")
     .with_body(serde_json::to_string(&jwks).unwrap())
     .create();
 
-    let mut cache = JwksCache::new(url);
+    let cache = JwksCache::new(url);
 
-    cache.last_update = 0;
+    let result = validate_jwt(jwt, cache, Validation::new(Algorithm::EdDSA));
 
-    let result = cache.get(&"KEY123".to_string());
-
-    mock.expect(2);
-
-    assert!(result.is_ok());
+    match result {
+      Ok(claims) => {
+        assert_eq!(claims.sub, "1234567890");
+      },
+      Err(e) => {
+        println!("Error: {}", e);
+        assert!(false);
+      }
+    }
 
     server.reset();
   }
