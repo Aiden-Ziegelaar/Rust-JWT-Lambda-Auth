@@ -106,7 +106,7 @@ impl JwksCache {
 }
 
 //function to validate the jwt token
-pub fn validate_jwt(jwt: String, key_cache: &mut JwksCache, validation: Validation) -> Result<Claims, JwtError> {
+pub fn validate_jwt(jwt: String, key_cache: &mut JwksCache, validation: &Validation) -> Result<Claims, JwtError> {
   let header = match decode_header(&jwt) {
     Ok(header) => header,
     Err(_) => return Err(JwtError{message: "Failed to decode jwt header".to_string(), component: "validate_jwt".to_string()}),
@@ -120,7 +120,7 @@ pub fn validate_jwt(jwt: String, key_cache: &mut JwksCache, validation: Validati
     Ok(key) => key,
     Err(_) => return Err(JwtError{message: "Failed to get jwk from cache".to_string(), component: "validate_jwt".to_string()}),
   };
-  let claims = match decode::<Claims>(&jwt, key, &validation) {
+  let claims = match decode::<Claims>(&jwt, key, validation) {
     Ok(claims) => claims.claims,
     Err(e) => {
       println!("{}", e);
@@ -592,7 +592,7 @@ mod tests {
 
     let mut cache = JwksCache::new(url);
 
-    let result = validate_jwt(jwt, &mut cache, Validation::new(Algorithm::EdDSA));
+    let result = validate_jwt(jwt, &mut cache, &Validation::new(Algorithm::EdDSA));
 
     match result {
       Ok(claims) => {
