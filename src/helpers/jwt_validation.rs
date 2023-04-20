@@ -106,7 +106,7 @@ impl JwksCache {
 }
 
 //function to validate the jwt token
-pub fn validate_jwt(jwt: String, mut key_cache: JwksCache, validation: Validation) -> Result<Claims, JwtError> {
+pub fn validate_jwt(jwt: String, key_cache: &mut JwksCache, validation: Validation) -> Result<Claims, JwtError> {
   let header = match decode_header(&jwt) {
     Ok(header) => header,
     Err(_) => return Err(JwtError{message: "Failed to decode jwt header".to_string(), component: "validate_jwt".to_string()}),
@@ -136,10 +136,31 @@ mod tests {
   use super::*;
   use mockito;
   use jsonwebtoken::{ jwk, Algorithm, EncodingKey, Header, encode };
-  use base64::{engine::general_purpose::URL_SAFE_NO_PAD, engine::general_purpose::STANDARD, Engine as _};
+  use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
+  fn create_jwks(key_pair: &ring::signature::Ed25519KeyPair, common_override: jwk::CommonParameters, algorithm_override: Option<jwk::OctetKeyPairParameters>) -> JwkSet {
+    return JwkSet {
+      keys: vec![
+        jwk::Jwk { 
+          common: jwk::CommonParameters {
+            public_key_use: common_override.public_key_use.or_else(|| -> Option<jwk::PublicKeyUse> {Some(jwk::PublicKeyUse::Signature)}),
+            key_operations: common_override.key_operations.or_else(|| -> Option<Vec<jwk::KeyOperations>> {Some(vec![jwk::KeyOperations::Sign])}),
+            algorithm:Some(Algorithm::EdDSA),
+            key_id:common_override.key_id.or_else(|| -> Option<String> {Some("KEY123".to_string())}),
+            x509_url: common_override.x509_url,
+            x509_chain: common_override.x509_chain,
+            x509_sha1_fingerprint: common_override.x509_sha1_fingerprint,
+            x509_sha256_fingerprint: common_override.x509_sha256_fingerprint},
+          algorithm: jwk::AlgorithmParameters::OctetKeyPair(algorithm_override.unwrap_or(jwk::OctetKeyPairParameters {
+            curve: jwk::EllipticCurve::Ed25519,
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(key_pair).as_ref().to_vec()),
+            key_type: jwk::OctetKeyPairType::OctetKeyPair }))
+        },
+      ] 
+    };
+  }
 
   // Fetch JWKS tests
-
   #[test]
   fn positive_fetch_jwks_test () {
     let mut server = mockito::Server::new();
@@ -149,26 +170,11 @@ mod tests {
     let rng = ring::rand::SystemRandom::new();
     let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     
-    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
-    let jwks = JwkSet {
-      keys: vec![
-        jwk::Jwk { 
-          common: jwk::CommonParameters {
-            public_key_use:Some(jwk::PublicKeyUse::Signature),
-            key_operations:Some(vec![jwk::KeyOperations::Sign]),
-            algorithm:Some(Algorithm::EdDSA),
-            key_id:Some("KEY123".to_string()), 
-            x509_url: None, 
-            x509_chain: None, 
-            x509_sha1_fingerprint: None, 
-            x509_sha256_fingerprint: None }, 
-          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
-            curve: jwk::EllipticCurve::Ed25519,
-            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
-            key_type: jwk::OctetKeyPairType::OctetKeyPair })
-        },
-      ] 
-    };
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();
+
+    let common_params = jwk::CommonParameters::default();
+
+    let jwks = create_jwks(&key_pair, common_params, None);
 
     let mock = server.mock("GET", "/")
     .with_status(200)
@@ -210,25 +216,10 @@ mod tests {
     let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     
     let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
-    let jwks = JwkSet {
-      keys: vec![
-        jwk::Jwk { 
-          common: jwk::CommonParameters {
-            public_key_use:Some(jwk::PublicKeyUse::Signature),
-            key_operations:Some(vec![jwk::KeyOperations::Sign]),
-            algorithm:Some(Algorithm::EdDSA),
-            key_id:Some("KEY123".to_string()), 
-            x509_url: None, 
-            x509_chain: None, 
-            x509_sha1_fingerprint: None, 
-            x509_sha256_fingerprint: None }, 
-          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
-            curve: jwk::EllipticCurve::Ed25519,
-            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
-            key_type: jwk::OctetKeyPairType::OctetKeyPair })
-        },
-      ] 
-    };
+    let common_params = jwk::CommonParameters::default();
+
+    let jwks = create_jwks(&key_pair, common_params, None);
+
     let result = jwks_to_decoding_keys(jwks).unwrap();
 
     assert_eq!(result.len(), 1);
@@ -239,26 +230,15 @@ mod tests {
     let rng = ring::rand::SystemRandom::new();
     let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     
-    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
-    let jwks = JwkSet {
-      keys: vec![
-        jwk::Jwk { 
-          common: jwk::CommonParameters {
-            public_key_use:Some(jwk::PublicKeyUse::Signature),
-            key_operations:Some(vec![jwk::KeyOperations::Sign]),
-            algorithm:Some(Algorithm::EdDSA),
-            key_id:Some("KEY123".to_string()), 
-            x509_url: None, 
-            x509_chain: None, 
-            x509_sha1_fingerprint: None, 
-            x509_sha256_fingerprint: None }, 
-          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
-            curve: jwk::EllipticCurve::Ed25519,
-            x: format!("{}/", STANDARD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec())),
-            key_type: jwk::OctetKeyPairType::OctetKeyPair })
-        },
-      ] 
-    };
+    let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();
+
+    let common_params = jwk::CommonParameters::default();
+    let algorithm_params = jwk::OctetKeyPairParameters {
+      curve: jwk::EllipticCurve::Ed25519,
+      x: "invalid".to_string(),
+      key_type: jwk::OctetKeyPairType::OctetKeyPair };
+
+    let jwks = create_jwks(&key_pair, common_params, Some(algorithm_params));
     let result = jwks_to_decoding_keys(jwks);
 
     assert_eq!(result.err(), Some(JwtError{message: "Failed to create decoding key".to_string(), component: "jwks_to_decoding_keys".to_string()}));
@@ -270,25 +250,13 @@ mod tests {
     let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     
     let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
-    let jwks = JwkSet {
-      keys: vec![
-        jwk::Jwk { 
-          common: jwk::CommonParameters {
-            public_key_use:Some(jwk::PublicKeyUse::Signature),
-            key_operations:Some(vec![jwk::KeyOperations::Sign]),
-            algorithm:Some(Algorithm::EdDSA),
-            key_id: None, 
-            x509_url: None, 
-            x509_chain: None, 
-            x509_sha1_fingerprint: None, 
-            x509_sha256_fingerprint: None }, 
-          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
-            curve: jwk::EllipticCurve::Ed25519,
-            x: STANDARD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
-            key_type: jwk::OctetKeyPairType::OctetKeyPair })
-        },
-      ] 
-    };
+
+    let common_params = jwk::CommonParameters::default();
+    
+    let mut jwks = create_jwks(&key_pair, common_params, None);
+
+    jwks.keys[0].common.key_id = None;
+
     let result = jwks_to_decoding_keys(jwks);
 
     assert_eq!(result.err(), Some(JwtError{message: "Key id not found in registered JWKS".to_string(), component: "jwks_to_decoding_keys".to_string()}));
@@ -305,25 +273,10 @@ mod tests {
     let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     
     let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
-    let jwks = JwkSet {
-      keys: vec![
-        jwk::Jwk { 
-          common: jwk::CommonParameters {
-            public_key_use:Some(jwk::PublicKeyUse::Signature),
-            key_operations:Some(vec![jwk::KeyOperations::Sign]),
-            algorithm:Some(Algorithm::EdDSA),
-            key_id:Some("KEY123".to_string()), 
-            x509_url: None, 
-            x509_chain: None, 
-            x509_sha1_fingerprint: None, 
-            x509_sha256_fingerprint: None }, 
-          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
-            curve: jwk::EllipticCurve::Ed25519,
-            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
-            key_type: jwk::OctetKeyPairType::OctetKeyPair })
-        },
-      ] 
-    };
+    let common_params = jwk::CommonParameters::default();
+
+    let jwks = create_jwks(&key_pair, common_params, None);
+
 
     let mock = server.mock("GET", "/")
     .with_status(200)
@@ -350,25 +303,10 @@ mod tests {
     let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     
     let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
-    let jwks = JwkSet {
-      keys: vec![
-        jwk::Jwk { 
-          common: jwk::CommonParameters {
-            public_key_use:Some(jwk::PublicKeyUse::Signature),
-            key_operations:Some(vec![jwk::KeyOperations::Sign]),
-            algorithm:Some(Algorithm::EdDSA),
-            key_id:Some("KEY123".to_string()), 
-            x509_url: None, 
-            x509_chain: None, 
-            x509_sha1_fingerprint: None, 
-            x509_sha256_fingerprint: None }, 
-          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
-            curve: jwk::EllipticCurve::Ed25519,
-            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
-            key_type: jwk::OctetKeyPairType::OctetKeyPair })
-        },
-      ] 
-    };
+    let common_params = jwk::CommonParameters::default();
+
+    let jwks = create_jwks(&key_pair, common_params, None);
+
 
     let mock = server.mock("GET", "/")
     .with_status(200)
@@ -397,25 +335,10 @@ mod tests {
     let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     
     let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
-    let jwks = JwkSet {
-      keys: vec![
-        jwk::Jwk { 
-          common: jwk::CommonParameters {
-            public_key_use:Some(jwk::PublicKeyUse::Signature),
-            key_operations:Some(vec![jwk::KeyOperations::Sign]),
-            algorithm:Some(Algorithm::EdDSA),
-            key_id:Some("KEY123".to_string()), 
-            x509_url: None, 
-            x509_chain: None, 
-            x509_sha1_fingerprint: None, 
-            x509_sha256_fingerprint: None }, 
-          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
-            curve: jwk::EllipticCurve::Ed25519,
-            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
-            key_type: jwk::OctetKeyPairType::OctetKeyPair })
-        },
-      ] 
-    };
+    let common_params = jwk::CommonParameters::default();
+
+    let jwks = create_jwks(&key_pair, common_params, None);
+
 
     let mock = server.mock("GET", "/")
     .with_status(200)
@@ -446,25 +369,10 @@ mod tests {
     let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     
     let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
-    let jwks = JwkSet {
-      keys: vec![
-        jwk::Jwk { 
-          common: jwk::CommonParameters {
-            public_key_use:Some(jwk::PublicKeyUse::Signature),
-            key_operations:Some(vec![jwk::KeyOperations::Sign]),
-            algorithm:Some(Algorithm::EdDSA),
-            key_id:Some("KEY123".to_string()), 
-            x509_url: None, 
-            x509_chain: None, 
-            x509_sha1_fingerprint: None, 
-            x509_sha256_fingerprint: None }, 
-          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
-            curve: jwk::EllipticCurve::Ed25519,
-            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
-            key_type: jwk::OctetKeyPairType::OctetKeyPair })
-        },
-      ] 
-    };
+    let common_params = jwk::CommonParameters::default();
+
+    let jwks = create_jwks(&key_pair, common_params, None);
+
 
     let mock = server.mock("GET", "/")
     .with_status(200)
@@ -498,25 +406,9 @@ mod tests {
     let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     
     let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
-    let jwks = JwkSet {
-      keys: vec![
-        jwk::Jwk { 
-          common: jwk::CommonParameters {
-            public_key_use:Some(jwk::PublicKeyUse::Signature),
-            key_operations:Some(vec![jwk::KeyOperations::Sign]),
-            algorithm:Some(Algorithm::EdDSA),
-            key_id:Some("KEY123".to_string()), 
-            x509_url: None, 
-            x509_chain: None, 
-            x509_sha1_fingerprint: None, 
-            x509_sha256_fingerprint: None }, 
-          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
-            curve: jwk::EllipticCurve::Ed25519,
-            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
-            key_type: jwk::OctetKeyPairType::OctetKeyPair })
-        },
-      ] 
-    };
+    let common_params = jwk::CommonParameters::default();
+
+    let jwks = create_jwks(&key_pair, common_params, None);
 
     let jwks_no_kid = JwkSet {
       keys: vec![
@@ -575,25 +467,10 @@ mod tests {
     let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     
     let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
-    let jwks = JwkSet {
-      keys: vec![
-        jwk::Jwk { 
-          common: jwk::CommonParameters {
-            public_key_use:Some(jwk::PublicKeyUse::Signature),
-            key_operations:Some(vec![jwk::KeyOperations::Sign]),
-            algorithm:Some(Algorithm::EdDSA),
-            key_id:Some("KEY123".to_string()), 
-            x509_url: None, 
-            x509_chain: None, 
-            x509_sha1_fingerprint: None, 
-            x509_sha256_fingerprint: None }, 
-          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
-            curve: jwk::EllipticCurve::Ed25519,
-            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
-            key_type: jwk::OctetKeyPairType::OctetKeyPair })
-        },
-      ] 
-    };
+    let common_params = jwk::CommonParameters::default();
+
+    let jwks = create_jwks(&key_pair, common_params, None);
+
 
     let jwks_no_kid = JwkSet {
       keys: vec![
@@ -652,25 +529,10 @@ mod tests {
     let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     
     let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
-    let jwks = JwkSet {
-      keys: vec![
-        jwk::Jwk { 
-          common: jwk::CommonParameters {
-            public_key_use:Some(jwk::PublicKeyUse::Signature),
-            key_operations:Some(vec![jwk::KeyOperations::Sign]),
-            algorithm:Some(Algorithm::EdDSA),
-            key_id:Some("KEY123".to_string()), 
-            x509_url: None, 
-            x509_chain: None, 
-            x509_sha1_fingerprint: None, 
-            x509_sha256_fingerprint: None }, 
-          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
-            curve: jwk::EllipticCurve::Ed25519,
-            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
-            key_type: jwk::OctetKeyPairType::OctetKeyPair })
-        },
-      ] 
-    };
+    let common_params = jwk::CommonParameters::default();
+
+    let jwks = create_jwks(&key_pair, common_params, None);
+
 
     let mock = server.mock("GET", "/")
     .with_status(200)
@@ -699,25 +561,10 @@ mod tests {
     let pkcs8_bytes = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     
     let key_pair = ring::signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap();    
-    let jwks = JwkSet {
-      keys: vec![
-        jwk::Jwk { 
-          common: jwk::CommonParameters {
-            public_key_use:Some(jwk::PublicKeyUse::Signature),
-            key_operations:Some(vec![jwk::KeyOperations::Sign]),
-            algorithm:Some(Algorithm::EdDSA),
-            key_id:Some("KEY123".to_string()), 
-            x509_url: None, 
-            x509_chain: None, 
-            x509_sha1_fingerprint: None, 
-            x509_sha256_fingerprint: None }, 
-          algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
-            curve: jwk::EllipticCurve::Ed25519,
-            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
-            key_type: jwk::OctetKeyPairType::OctetKeyPair })
-        },
-      ] 
-    };
+    let common_params = jwk::CommonParameters::default();
+
+    let jwks = create_jwks(&key_pair, common_params, None);
+
     
     let signing_key  = EncodingKey::from_ed_der(&pkcs8_bytes.as_ref().to_vec());
 
@@ -743,9 +590,9 @@ mod tests {
     .with_body(serde_json::to_string(&jwks).unwrap())
     .create();
 
-    let cache = JwksCache::new(url);
+    let mut cache = JwksCache::new(url);
 
-    let result = validate_jwt(jwt, cache, Validation::new(Algorithm::EdDSA));
+    let result = validate_jwt(jwt, &mut cache, Validation::new(Algorithm::EdDSA));
 
     match result {
       Ok(claims) => {

@@ -1,23 +1,19 @@
 pub(crate) mod helpers;
-#[macro_use]
-extern crate lazy_static;
+
 use aws_lambda_events::apigw::{ApiGatewayCustomAuthorizerRequest, ApiGatewayCustomAuthorizerResponse, ApiGatewayCustomAuthorizerPolicy};
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 
-
-use helpers::{policy_builder::{APIGatewayPolicyBuilder}, jwt_validation::JwksCache};
+use helpers::{policy_builder::APIGatewayPolicyBuilder, jwt_validation::{JwksCache, validate_jwt}};
 use serde_json::json;
 
+use lazy_static::lazy_static; // 1.4.0
+use std::sync::Mutex;
+
 lazy_static! {
-    /// Instantiate JWKS_CACHE to reuse keys between requests
-    static ref JWKS_CACHE: JwksCache = JwksCache::new(std::env::var("JWKS_URL").unwrap());
+    static ref CACHE: Mutex<JwksCache> = Mutex::new(JwksCache::new(std::env::var("JWKS_URL".to_string()).unwrap()));
+    static ref VALIDATION: jsonwebtoken::Validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::EdDSA);
 }
 
-/// This is the main body for the function.
-/// Write your code inside it.
-/// There are some code example in the following URLs:
-/// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
-/// - https://github.com/aws-samples/serverless-rust-demo/
 async fn function_handler(event: LambdaEvent<ApiGatewayCustomAuthorizerRequest>) -> Result<ApiGatewayCustomAuthorizerResponse, Error> {
     let method_arn = match event.payload.method_arn {
         Some(arn) => arn,
@@ -39,17 +35,31 @@ async fn function_handler(event: LambdaEvent<ApiGatewayCustomAuthorizerRequest>)
     let region = tmp[3];
     let rest_api_id = api_gateway_arn_tmp[0];
     let stage = api_gateway_arn_tmp[1];
-    
-    let policy_builder_instance = APIGatewayPolicyBuilder::new(region, aws_account_id, rest_api_id, stage);
 
-    let response = ApiGatewayCustomAuthorizerResponse {
-        principal_id: Some("user".to_string()),
-        policy_document: policy_builder_instance.get_policy_document(),
-        context: json!({}),
-        usage_identifier_key: None,
-    };
+    let cache = &mut CACHE.lock().expect("Could not lock mutex");
 
-    Ok(response)
+    return match validate_jwt(event.payload.authorization_token.unwrap(), cache, VALIDATION) {
+        Ok(_) => {
+            let policy_builder_instance = APIGatewayPolicyBuilder::new(region, aws_account_id, rest_api_id, stage);
+            let response = ApiGatewayCustomAuthorizerResponse {
+                principal_id: Some("user".to_string()),
+                policy_document: policy_builder_instance.allow_all_methods().get_policy_document(),
+                context: json!({}),
+                usage_identifier_key: None,
+            };
+            Ok(response)
+        },
+        Err(_) => {
+            let policy_builder_instance = APIGatewayPolicyBuilder::new(region, aws_account_id, rest_api_id, stage);
+            let response = ApiGatewayCustomAuthorizerResponse {
+                principal_id: Some("user".to_string()),
+                policy_document: policy_builder_instance.allow_all_methods().get_policy_document(),
+                context: json!({}),
+                usage_identifier_key: None,
+            };
+            Ok(response)
+        }
+    }
 }
 
 #[tokio::main]
