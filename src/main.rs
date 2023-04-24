@@ -37,13 +37,13 @@ async fn function_handler(event: LambdaEvent<ApiGatewayCustomAuthorizerRequest>)
 
     let cache = &mut CACHE.lock().expect("Could not lock mutex");
 
-    let validation: jsonwebtoken::Validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::EdDSA);
+    let validation: jsonwebtoken::Validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
 
     return match validate_jwt(event.payload.authorization_token.unwrap(), cache, &validation) {
         Ok(_) => {
             let policy_builder_instance = APIGatewayPolicyBuilder::new(region, aws_account_id, rest_api_id, stage);
             let response = ApiGatewayCustomAuthorizerResponse {
-                principal_id: Some("user".to_string()),
+                principal_id: Some(validation.sub.unwrap_or("anonymous".to_string())),
                 policy_document: policy_builder_instance.allow_all_methods().get_policy_document(),
                 context: json!({}),
                 usage_identifier_key: None,
@@ -53,8 +53,8 @@ async fn function_handler(event: LambdaEvent<ApiGatewayCustomAuthorizerRequest>)
         Err(_) => {
             let policy_builder_instance = APIGatewayPolicyBuilder::new(region, aws_account_id, rest_api_id, stage);
             let response = ApiGatewayCustomAuthorizerResponse {
-                principal_id: Some("user".to_string()),
-                policy_document: policy_builder_instance.allow_all_methods().get_policy_document(),
+                principal_id: Some("anonymous".to_string()),
+                policy_document: policy_builder_instance.deny_all_methods().get_policy_document(),
                 context: json!({}),
                 usage_identifier_key: None,
             };

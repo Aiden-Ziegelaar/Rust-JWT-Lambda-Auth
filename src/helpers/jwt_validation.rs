@@ -5,11 +5,11 @@ use std::{time::{SystemTime, UNIX_EPOCH }, fmt, collections::HashMap };
 //struct to hold the claims of the jwt token
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-  aud: String,         // Audience
+  aud: Option<String>,         // Audience
   exp: usize,          // Required (validate_exp defaults to true in validation). Expiration time (as UTC timestamp)
   iat: usize,          // Issued at (as UTC timestamp)
   iss: String,         // Issuer
-  nbf: usize,          // Not Before (as UTC timestamp)
+  nbf: Option<usize>,          // Not Before (as UTC timestamp)
   sub: String,         // Subject (whom token refers to)
 }
 
@@ -111,7 +111,6 @@ pub fn validate_jwt(jwt: String, key_cache: &mut JwksCache, validation: &Validat
     Ok(header) => header,
     Err(_) => return Err(JwtError{message: "Failed to decode jwt header".to_string(), component: "validate_jwt".to_string()}),
   };
-  println!("{:?}", header);
   let kid = match header.kid {
     Some(kid) => kid,
     None => return Err(JwtError{message: "No KID found in jwt header".to_string(), component: "validate_jwt".to_string()}),
@@ -576,11 +575,11 @@ mod tests {
         kid: Some("KEY123".to_string()),
         ..Default::default()
       }, &Claims {
-        aud: "https://example.com".to_string(),
+        aud: Some("https://example.com".to_string()),
         exp: (now + 60) as usize,
         iat: now as usize,
         iss: "https://example.com".to_string(),
-        nbf: now as usize,
+        nbf: Some(now as usize),
         sub: "1234567890".to_string(),
       }, &signing_key).unwrap();
 
