@@ -95,7 +95,7 @@ impl JwksCache {
     if now - self.last_update > 3600 {
       match self.update() {
         Ok(_) => (),
-        Err(e) => println!("{}", e.to_string()),
+        Err(e) => println!("{}", e),
       };
     };
     match self.jwks_hashmap.get(kid) {
@@ -138,11 +138,11 @@ mod tests {
   use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
   fn create_jwks(key_pair: &ring::signature::Ed25519KeyPair, common_override: jwk::CommonParameters, algorithm_override: Option<jwk::OctetKeyPairParameters>) -> JwkSet {
-    return JwkSet {
+    JwkSet {
       keys: vec![
         jwk::Jwk { 
           common: jwk::CommonParameters {
-            public_key_use: common_override.public_key_use.or_else(|| -> Option<jwk::PublicKeyUse> {Some(jwk::PublicKeyUse::Signature)}),
+            public_key_use: common_override.public_key_use.or(Some(jwk::PublicKeyUse::Signature)),
             key_operations: common_override.key_operations.or_else(|| -> Option<Vec<jwk::KeyOperations>> {Some(vec![jwk::KeyOperations::Sign])}),
             algorithm:Some(Algorithm::EdDSA),
             key_id:common_override.key_id.or_else(|| -> Option<String> {Some("KEY123".to_string())}),
@@ -152,11 +152,11 @@ mod tests {
             x509_sha256_fingerprint: common_override.x509_sha256_fingerprint},
           algorithm: jwk::AlgorithmParameters::OctetKeyPair(algorithm_override.unwrap_or(jwk::OctetKeyPairParameters {
             curve: jwk::EllipticCurve::Ed25519,
-            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(key_pair).as_ref().to_vec()),
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(key_pair).as_ref()),
             key_type: jwk::OctetKeyPairType::OctetKeyPair }))
         },
       ] 
-    };
+    }
   }
 
   // Fetch JWKS tests
@@ -423,7 +423,7 @@ mod tests {
             x509_sha256_fingerprint: None }, 
           algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
             curve: jwk::EllipticCurve::Ed25519,
-            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref()),
             key_type: jwk::OctetKeyPairType::OctetKeyPair })
         },
       ] 
@@ -485,7 +485,7 @@ mod tests {
             x509_sha256_fingerprint: None }, 
           algorithm: jwk::AlgorithmParameters::OctetKeyPair(jwk::OctetKeyPairParameters {
             curve: jwk::EllipticCurve::Ed25519,
-            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref().to_vec()),
+            x: URL_SAFE_NO_PAD.encode(ring::signature::KeyPair::public_key(&key_pair).as_ref()),
             key_type: jwk::OctetKeyPairType::OctetKeyPair })
         },
       ] 
@@ -565,7 +565,7 @@ mod tests {
     let jwks = create_jwks(&key_pair, common_params, None);
 
     
-    let signing_key  = EncodingKey::from_ed_der(&pkcs8_bytes.as_ref().to_vec());
+    let signing_key  = EncodingKey::from_ed_der(pkcs8_bytes.as_ref());
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 

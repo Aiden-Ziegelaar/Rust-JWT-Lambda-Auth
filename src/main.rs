@@ -10,7 +10,7 @@ use lazy_static::lazy_static; // 1.4.0
 use std::sync::Mutex;
 
 lazy_static! {
-    static ref CACHE: Mutex<JwksCache> = Mutex::new(JwksCache::new(std::env::var("JWKS_URL".to_string()).unwrap()));
+    static ref CACHE: Mutex<JwksCache> = Mutex::new(JwksCache::new(std::env::var("JWKS_URL").unwrap()));
 }
 
 async fn function_handler(event: LambdaEvent<ApiGatewayCustomAuthorizerRequest>) -> Result<ApiGatewayCustomAuthorizerResponse, Error> {
@@ -39,7 +39,7 @@ async fn function_handler(event: LambdaEvent<ApiGatewayCustomAuthorizerRequest>)
 
     let validation: jsonwebtoken::Validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
 
-    return match validate_jwt(event.payload.authorization_token.unwrap(), cache, &validation) {
+    match validate_jwt(event.payload.authorization_token.unwrap(), cache, &validation) {
         Ok(_) => {
             let policy_builder_instance = APIGatewayPolicyBuilder::new(region, aws_account_id, rest_api_id, stage);
             let response = ApiGatewayCustomAuthorizerResponse {
